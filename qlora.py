@@ -35,8 +35,9 @@ from transformers.models.gpt_neox.modeling_gpt_neox import RotaryEmbedding
 from transformers.models.opt.modeling_opt import OPTLearnedPositionalEmbedding
 from .Mem_helpers.flash_attention_plugin import FlashAttentionWrapper, FlashAttentionWrapperWithAlibi, FlashAttentionWrapperWithRotary 
 from .Mem_helpers.bpt_attention_plugin import BPTAttentionWrapper, BPTAttentionWrapperWithAlibi, BPTAttentionWrapperWithRotary 
-from .Mem_helpers.bpt_attention_plugin import FeedForwardWrapperNeoX, BPTAttentionWrapperWithAlibi, BPTAttentionWrapperWithRotary 
+from .Mem_helpers.bpt_attention_plugin import FeedForwardWrapperNeoX
 from .Mem_helpers.landmarks_attention_plugin import LlamaForCausalLM as LlamaMemForCausalLM
+from .Mem_helpers.longformer_attention_plugin import LongformerAttentionWrapperWithRotary, set_global_attention_indices
 
 from peft import (
     prepare_model_for_kbit_training,

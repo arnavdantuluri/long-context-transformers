@@ -5,8 +5,11 @@ from typing import Optional
 from flash_attn.modules.mha import FlashSelfAttention
 from transformers.models.bloom.modeling_bloom import dropout_add
 from typing import Optional, Tuple
+from einops import rearrange
 import torch.nn.functional as F
-from .BPT.bpt_pt import blockwise_compute_attn, blockwise_compute_ffn
+# blockwise_compute_attn doesn't seem to be working with the patch
+# defaulting to lucid rains memory efficient implementation since they are the same
+from .BPT.bpt_pt import blockwise_compute_attn, blockwise_compute_ffn, memory_efficient_attention
 
 class FeedForwardWrapperNeoX(torch.nn.Module):
     def __init__(self, mlp, chunk_size):
@@ -16,7 +19,7 @@ class FeedForwardWrapperNeoX(torch.nn.Module):
     
     def forward(self, hidden_states):
         hidden_states = blockwise_compute_ffn(self.cell.dense_h_to_4h, hidden_states, self.chunk_size)
-        hidden_states = self.cell.act(hidden_states)
+        # hidden_states = self.cell.act(hidden_states)
         hidden_states = blockwise_compute_ffn(self.cell.dense_4h_to_h, hidden_states, self.chunk_size)
         return hidden_states
 
@@ -82,7 +85,7 @@ class BPTAttentionWrapper(torch.nn.Module):
         query_states = self.attention._shape(query_states, tgt_len, bsz).permute(0, 2, 1, 3)
         value_states = value_states.view(*proj_shape).permute(0, 2, 1, 3)
         
-        attn_output = blockwise_compute_attn(query_states, key_states, value_states)
+        attn_output = memory_efficient_attention(query_states, key_states, value_states, q_bucket_size=self.query_chunk_size, k_bucket_size=self.key_chunk_size, dropout=self.dropout_p)
         attn_weights_reshaped = None
         
         # Use the `embed_dim` from the config (stored in the class) rather than `hidden_state` because `attn_output` can be
@@ -107,7 +110,8 @@ class BPTAttentionWrapperWithRotary(torch.nn.Module):
         head_mask=None,
         layer_past=None,
         use_cache=False,
-        output_attentions=False):
+        output_attentions=False,
+        position_ids=None):
         has_layer_past = layer_past is not None
 
         # Compute QKV
@@ -138,7 +142,7 @@ class BPTAttentionWrapperWithRotary(torch.nn.Module):
             offset = layer_past[0].shape[-2]
             seq_len += offset
         cos, sin = self.attention.rotary_emb(value, seq_len=seq_len)
-        query, key = apply_rotary_pos_emb(query_rot, key_rot, cos, sin, offset=offset)
+        query, key = apply_rotary_pos_emb(query_rot, key_rot, cos, sin, position_ids=position_ids)
         query = torch.cat((query, query_pass), dim=-1)
         key = torch.cat((key, key_pass), dim=-1)
 
@@ -153,11 +157,11 @@ class BPTAttentionWrapperWithRotary(torch.nn.Module):
         # Compute attention
         #attn_output, attn_weights = self._attn(query, key, value, attention_mask, head_mask)
 
-        attn_output = blockwise_compute_attn(query, key, value)
+        attn_output = memory_efficient_attention(query, key, value, q_bucket_size=self.query_chunk_size, k_bucket_size=self.key_chunk_size)
         attn_weights = None
 
         # Reshape outputs
-        attn_output = attn_output.view(attn_output.size(0), attn_output.size(1), self.attention.num_attention_heads * self.attention.head_size)
+        attn_output = rearrange(attn_output, 'b h d n -> b d (h n)')
         attn_output = self.attention.dense(attn_output)
         
         outputs = (attn_output, present)
@@ -212,7 +216,7 @@ class BPTAttentionWrapperWithAlibi(torch.nn.Module):
         reshaped_value_layer = value_layer.reshape(batch_size, self.attention.num_heads, value_layer.shape[1], value_layer.shape[2]).permute(0, 2, 1, 3)
         offset_key_layer = self.attention.inv_norm_factor * reshaped_key_layer + self.attention.beta * (torch.linalg.pinv(reshaped_query_layer.permute(0,2,1,3).float()) * alibi.view(batch_size, alibi.shape[0]//batch_size, alibi.shape[1], alibi.shape[2])).permute(0, 3, 1, 2).half()
 
-        context_layer = blockwise_compute_attn(reshaped_query_layer, offset_key_layer, reshaped_value_layer)
+        context_layer = memory_efficient_attention(reshaped_query_layer, offset_key_layer, reshaped_value_layer, q_bucket_size=self.query_chunk_size, k_bucket_size=self.key_chunk_size, dropout=self.dropout_p)
         context_layer = torch.flatten(context_layer, start_dim = 2)
         
         # aggregate results across tp ranks. See here: https://github.com/pytorch/pytorch/issues/76232
