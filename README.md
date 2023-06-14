@@ -4,7 +4,9 @@ Exploring finetuning public checkpoints on filtered datasets to extend range of 
 
 ## Currently supported 
 Currently has code for Flash Attention + QLoRa, tested to work with NeoX models
+
 Also has code for patching NeoX models with Blockwise Parallel Transformer attention (able to support 42k tokens on 160m model with single A100 gpu)
+
 Will setup longformer and landmarks soon
 
 ## Training examples WIP
