@@ -9,7 +9,7 @@ from einops import rearrange
 import torch.nn.functional as F
 # blockwise_compute_attn doesn't seem to be working with the patch
 # defaulting to lucid rains memory efficient implementation since they are the same
-from .BPT.bpt_pt import blockwise_compute_attn, blockwise_compute_ffn, memory_efficient_attention
+from .BPT.bpt_pt import blockwise_compute_ffn, memory_efficient_attention
 
 class FeedForwardWrapperNeoX(torch.nn.Module):
     def __init__(self, mlp, chunk_size):
@@ -19,7 +19,7 @@ class FeedForwardWrapperNeoX(torch.nn.Module):
     
     def forward(self, hidden_states):
         hidden_states = blockwise_compute_ffn(self.cell.dense_h_to_4h, hidden_states, self.chunk_size)
-        # hidden_states = self.cell.act(hidden_states)
+        hidden_states = self.cell.act(hidden_states)
         hidden_states = blockwise_compute_ffn(self.cell.dense_4h_to_h, hidden_states, self.chunk_size)
         return hidden_states
 

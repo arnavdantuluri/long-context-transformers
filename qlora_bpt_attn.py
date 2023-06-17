@@ -26,18 +26,17 @@ from transformers import (
     Seq2SeqTrainer,
     BitsAndBytesConfig,
     LlamaTokenizer
-
 )
-from datasets import load_dataset, Dataset
+from datasets import load_dataset, Dataset, load_from_disk
 import evaluate
 from transformers import GPTNeoXForCausalLM, BloomForCausalLM, OPTForCausalLM
 from transformers.models.gpt_neox.modeling_gpt_neox import RotaryEmbedding
 from transformers.models.opt.modeling_opt import OPTLearnedPositionalEmbedding
-from .Mem_helpers.flash_attention_plugin import FlashAttentionWrapper, FlashAttentionWrapperWithAlibi, FlashAttentionWrapperWithRotary 
-from .Mem_helpers.bpt_attention_plugin import BPTAttentionWrapper, BPTAttentionWrapperWithAlibi, BPTAttentionWrapperWithRotary 
-from .Mem_helpers.bpt_attention_plugin import FeedForwardWrapperNeoX
-from .Mem_helpers.landmarks_attention_plugin import LlamaForCausalLM as LlamaMemForCausalLM
-from .Mem_helpers.longformer_attention_plugin import LongformerAttentionWrapperWithRotary, set_global_attention_indices
+from Mem_helpers.bpt_attention_plugin import BPTAttentionWrapper, BPTAttentionWrapperWithAlibi, BPTAttentionWrapperWithRotary 
+from Mem_helpers.flash_attention_plugin import FlashAttentionWrapper, FlashAttentionWrapperWithAlibi, FlashAttentionWrapperWithRotary
+from Mem_helpers.bpt_attention_plugin import FeedForwardWrapperNeoX
+from Mem_helpers.landmarks_attention_plugin import LlamaForCausalLM as LlamaMemForCausalLM
+from Mem_helpers.longformer_attention_plugin import LongformerAttentionWrapperWithRotary, set_global_attention_indices
 
 from peft import (
     prepare_model_for_kbit_training,
@@ -55,6 +54,9 @@ logger = logging.getLogger(__name__)
 
 IGNORE_INDEX = -100
 DEFAULT_PAD_TOKEN = "[PAD]"
+QUERY_CHUNK_SIZE=512
+KEY_CHUNK_SIZE=512
+FFN_CHUNK_SIZE=512
 
 @dataclass
 class ModelArguments:
@@ -295,23 +297,21 @@ def get_accelerate_model(args, checkpoint_dir):
     max_positions = 2**13 # 8k
 
     if "pythia" in args.model_name_or_path or "gpt-neox" in args.model_args.model_name_or_path:
-        model = GPTNeoXForCausalLM.from_pretrained(args.model_name_or_path)
         for each in model.gpt_neox.layers:
             each.attention.rotary_emb = RotaryEmbedding(each.attention.rotary_ndims, max_positions,10000)
             each.attention.bias = torch.tril(torch.ones((max_positions, max_positions), dtype=torch.uint8)).view(
                         1, 1, max_positions, max_positions
                     )
-            each.attention = FlashAttentionWrapperWithRotary(each.attention, max_seqlen = max_positions)
+            each.attention = BPTAttentionWrapperWithRotary(each.attention, query_chunk_size=QUERY_CHUNK_SIZE, key_chunk_size=KEY_CHUNK_SIZE)
+            each.mlp = FeedForwardWrapperNeoX(each.mlp, chunk_size=FFN_CHUNK_SIZE)
 
     elif "bloom" in args.model_name_or_path:
-        model = BloomForCausalLM.from_pretrained(args.model_name_or_path)
         for each in model.transformer.h:
-            each.self_attention = FlashAttentionWrapperWithAlibi(each.self_attention, max_seqlen = max_positions)
+            each.self_attention = BPTAttentionWrapperWithAlibi(each.self_attention, query_chunk_size=QUERY_CHUNK_SIZE, key_chunk_size=KEY_CHUNK_SIZE)
 
     elif "opt" in args.model_name_or_path:
-        model = OPTForCausalLM.from_pretrained(args.model_name_or_path)
         for each in model.model.decoder.layers:
-            each.self_attn = FlashAttentionWrapper(each.self_attn, max_seqlen = max_positions)
+            each.self_attn = BPTAttentionWrapper(each.self_attn, query_chunk_size=QUERY_CHUNK_SIZE, key_chunk_size=KEY_CHUNK_SIZE)
         original_num_embeddings = model.model.decoder.embed_positions.num_embeddings - 2
         assert (max_positions + 2) % original_num_embeddings == 0
         original_embed_positions = model.model.decoder.embed_positions.weight.data
@@ -535,7 +535,7 @@ def make_data_module(tokenizer: transformers.PreTrainedTokenizer, args) -> Dict:
         - vicuna
 
     """
-    def load_data(dataset_name):
+    def load_data(dataset_name, offline=True):
         if dataset_name == 'alpaca':
             return load_dataset("tatsu-lab/alpaca")
         elif dataset_name == 'alpaca-clean':
@@ -549,7 +549,10 @@ def make_data_module(tokenizer: transformers.PreTrainedTokenizer, args) -> Dict:
         elif dataset_name == 'longform':
             return load_dataset("akoksal/LongForm")
         elif dataset_name == 'oasst1':
-            return load_dataset("timdettmers/openassistant-guanaco")
+            if not offline:
+                return load_dataset("timdettmers/openassistant-guanaco")
+            else:
+                return load_from_disk("/p/scratch/ccstdl/dantuluri1/arxiv-summarization")
         elif dataset_name == 'vicuna':
             raise NotImplementedError("Vicuna data was not released.")
         else:
@@ -673,7 +676,7 @@ def train():
         args.model_name_or_path,
         cache_dir=args.cache_dir,
         padding_side="right",
-        use_fast=False, # Fast tokenizer giving issues.
+        use_fast=True if not 'llama' in args.model_name_or_path else False, # Fast tokenizer giving issues.
         tokenizer_type='llama' if 'llama' in args.model_name_or_path else None, # Needed for HF name change
     )
     if tokenizer._pad_token is None:

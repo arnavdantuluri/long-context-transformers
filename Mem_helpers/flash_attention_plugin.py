@@ -94,7 +94,8 @@ class FlashAttentionWrapperWithRotary(torch.nn.Module):
         head_mask=None,
         layer_past=None,
         use_cache=False,
-        output_attentions=False):
+        output_attentions=False,
+        position_ids=None):
         has_layer_past = layer_past is not None
 
         # Compute QKV
@@ -125,7 +126,7 @@ class FlashAttentionWrapperWithRotary(torch.nn.Module):
             offset = layer_past[0].shape[-2]
             seq_len += offset
         cos, sin = self.attention.rotary_emb(value, seq_len=seq_len)
-        query, key = apply_rotary_pos_emb(query_rot, key_rot, cos, sin, offset=offset)
+        query, key = apply_rotary_pos_emb(query_rot, key_rot, cos, sin, position_ids=position_ids)
         query = torch.cat((query, query_pass), dim=-1)
         key = torch.cat((key, key_pass), dim=-1)
 

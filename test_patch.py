@@ -11,7 +11,7 @@ model_path_or_name = "EleutherAI/pythia-160m"
 tokenizer = AutoTokenizer.from_pretrained(model_path_or_name)
 model = AutoModelForCausalLM.from_pretrained(model_path_or_name)
 
-factor = 90
+factor = 1
 max_positions = 517 * factor
 tokenizer.pad_token = tokenizer.mask_token
 model.config.max_position_embeddings=max_positions
