@@ -32,9 +32,7 @@ import evaluate
 from transformers import GPTNeoXForCausalLM, BloomForCausalLM, OPTForCausalLM
 from transformers.models.gpt_neox.modeling_gpt_neox import RotaryEmbedding
 from transformers.models.opt.modeling_opt import OPTLearnedPositionalEmbedding
-from Mem_helpers.flash_attention_plugin import FlashAttentionWrapper, FlashAttentionWrapperWithAlibi, FlashAttentionWrapperWithRotary 
-from Mem_helpers.landmarks_attention_plugin import LlamaForCausalLM as LlamaMemForCausalLM
-from Mem_helpers.longformer_attention_plugin import LongformerAttentionWrapperWithRotary, set_global_attention_indices
+from Mem_helpers.FlashAttention.flash_attention_plugin import FlashAttentionWrapper, FlashAttentionWrapperWithAlibi, FlashAttentionWrapperWithRotary 
 
 from peft import (
     prepare_model_for_kbit_training,

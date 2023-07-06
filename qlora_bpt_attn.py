@@ -32,11 +32,8 @@ import evaluate
 from transformers import GPTNeoXForCausalLM, BloomForCausalLM, OPTForCausalLM
 from transformers.models.gpt_neox.modeling_gpt_neox import RotaryEmbedding
 from transformers.models.opt.modeling_opt import OPTLearnedPositionalEmbedding
-from Mem_helpers.bpt_attention_plugin import BPTAttentionWrapper, BPTAttentionWrapperWithAlibi, BPTAttentionWrapperWithRotary 
-from Mem_helpers.flash_attention_plugin import FlashAttentionWrapper, FlashAttentionWrapperWithAlibi, FlashAttentionWrapperWithRotary
-from Mem_helpers.bpt_attention_plugin import FeedForwardWrapperNeoX
-from Mem_helpers.landmarks_attention_plugin import LlamaForCausalLM as LlamaMemForCausalLM
-from Mem_helpers.longformer_attention_plugin import LongformerAttentionWrapperWithRotary, set_global_attention_indices
+from Mem_helpers.BPT.bpt_attention_plugin import BPTAttentionWrapper, BPTAttentionWrapperWithAlibi, BPTAttentionWrapperNeoX , BPTAttentionWrapperLLaMA
+from Mem_helpers.BPT.bpt_feedforward_plugin import FeedForwardWrapperNeoX, FeedForwardWrapperLLaMA, FeedForwardWrapperMPT, FeedForwardWrapperFalcon
 
 from peft import (
     prepare_model_for_kbit_training,
@@ -302,7 +299,16 @@ def get_accelerate_model(args, checkpoint_dir):
             each.attention.bias = torch.tril(torch.ones((max_positions, max_positions), dtype=torch.uint8)).view(
                         1, 1, max_positions, max_positions
                     )
-            each.attention = BPTAttentionWrapperWithRotary(each.attention, query_chunk_size=QUERY_CHUNK_SIZE, key_chunk_size=KEY_CHUNK_SIZE)
+            each.attention = BPTAttentionWrapperNeoX(each.attention, query_chunk_size=QUERY_CHUNK_SIZE, key_chunk_size=KEY_CHUNK_SIZE)
+            each.mlp = FeedForwardWrapperNeoX(each.mlp, chunk_size=FFN_CHUNK_SIZE)
+    
+    if "llama" in args.model_name_or_path or "llama" in args.model_args.model_name_or_path:
+        for each in model.gpt_neox.layers:
+            each.attention.rotary_emb = RotaryEmbedding(each.attention.rotary_ndims, max_positions,10000)
+            each.attention.bias = torch.tril(torch.ones((max_positions, max_positions), dtype=torch.uint8)).view(
+                        1, 1, max_positions, max_positions
+                    )
+            each.attention = BPTAttentionWrapperNeoX(each.attention, query_chunk_size=QUERY_CHUNK_SIZE, key_chunk_size=KEY_CHUNK_SIZE)
             each.mlp = FeedForwardWrapperNeoX(each.mlp, chunk_size=FFN_CHUNK_SIZE)
 
     elif "bloom" in args.model_name_or_path:

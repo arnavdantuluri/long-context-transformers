@@ -16,30 +16,16 @@ class GPTNeoXMLP(nn.Module):
         hidden_states = self.dense_4h_to_h(hidden_states)
         return hidden_states
 
-def blockwise_compute_ffn(cell, inputs, chunk_size):
-    inputs = torch.split(inputs, chunk_size, dim=-2)
-    num_q = len(inputs)
-
-    def ffn(cell, _, hidden_states):
-        outputs = cell(hidden_states)
-        return outputs
-    
-    outputs = []
-    for i in range(num_q):
-        outputs.append(ffn(cell, None, inputs[i]))
-    
-    res = torch.concat(outputs, dim=-2)
-    # res = rearrange(res, 'n b c d -> b (n c) d')
-    return res
-
 import torch
 from functools import partial
 from torch import nn, einsum
 from torch.utils.checkpoint import checkpoint
 import torch.nn.functional as F
+from .bpt_triton import matmul, add
 
+from torch.nn.functional import scaled_dot_product_attention
 from einops import rearrange
-
+from datetime import datetime
 # helper functions
 
 def exists(val):
@@ -198,16 +184,47 @@ def memory_efficient_attention(
 
     return torch.cat(out, dim = -2)
 
+def blockwise_compute_ffn(cell, inputs, chunk_size):
+    inputs = torch.split(inputs, chunk_size, dim=1)
+    num_q = len(inputs)
+
+    def ffn(cell, _, hidden_states):
+        outputs = cell(hidden_states)
+        return outputs
+    
+    outputs = []
+    for i in range(num_q):
+        outputs.append(ffn(cell, None, inputs[i]))
+    
+    res = torch.concat(outputs, dim=1)
+    # res = rearrange(res, 'n b c d -> b (n c) d')
+    return res
+
 if __name__ == "__main__":
     # Blocked mem stuff
     q = torch.rand(2, 512, 16, 128)
-    k = torch.rand(2, 2048, 16, 128)
-    v = torch.rand(2, 2048, 16, 128)
+    k = torch.rand(2, 512, 16, 128)
+    v = torch.rand(2, 512, 16, 128)
     bias = torch.rand(2, 1, 512, 2048)
 
     # Blocked FFN Stuff
     x = torch.rand(2, 256, 512)
     cell = GPTNeoXMLP()
-    y_pt_mem = memory_efficient_attention(q, k, v, bias=bias, query_chunk_size=512, key_chunk_size=512)
+    startTime = datetime.now()
+    y_pt_mem = memory_efficient_attention(q, k, v, q_bucket_size=512, k_bucket_size=512)
+    print('pythonic mem eff attn', datetime.now() - startTime)
+
+    torch.backends.cuda.sdp_kernel(True)
+    torch.backends.cuda.enable_flash_sdp(True)
+    startTime = datetime.now()
+    y_pt_mem = scaled_dot_product_attention(q, k, v)
+    print('pythonic mem eff attn', datetime.now() - startTime)
+
+    startTime = datetime.now()
     y_pt_ffn = blockwise_compute_ffn(cell, x, 256)
+    print('pythonic blocked ffn', datetime.now() - startTime)
+
+    startTime = datetime.now()
+    y_pt_ffn = blockwise_compute_ffn_triton(cell, x)
+    print('pythonic blocked ffn', datetime.now() - startTime)
     print(y_pt_ffn.shape)
